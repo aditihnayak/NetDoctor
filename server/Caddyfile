@@ -1,0 +1,26 @@
+# Load-test endpoint (optional). NetDoctor uses Cloudflare's public speed test by
+# default; host your own with this and point clients at it:
+#   NETDOCTOR_DOWNLOAD_URL=https://speed.example.com/25mb.bin
+#   NETDOCTOR_UPLOAD_URL=https://speed.example.com/upload
+# Create the download file once:  head -c 25000000 /dev/urandom > /srv/speed/25mb.bin
+speed.example.com {
+	encode {
+		match {
+			not path /25mb.bin
+		}
+	}
+	handle /upload {
+		request_body {
+			max_size 250MB
+		}
+		respond 200
+	}
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		root * /srv/speed
+		header Cache-Control "no-store"
+		file_server
+	}
+}

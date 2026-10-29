@@ -1,0 +1,32 @@
+[project]
+name = "netdoctor"
+version = "1.0.0"
+description = "A 30-second checkup that tells you, in plain words, why your internet is slow."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "icmplib>=3.0.4",
+    "dnspython>=2.6",
+]
+
+[project.optional-dependencies]
+desktop = ["pywebview>=5.0"]
+
+[project.scripts]
+netdoctor = "netdoctor.cli.main:run"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["netdoctor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

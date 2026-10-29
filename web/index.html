@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetDoctor Lag Test</title>
+<meta name="description" content="Does your connection lag when it's busy? A 15-second in-browser test. Get the full diagnosis with the NetDoctor app.">
+<style>
+:root{--bg:#f7f7f5;--surface:#fff;--text:#1b1b1a;--muted:#6b6b66;--border:#e4e4df;--accent:#2f5bea;--accent-text:#fff;--good:#1f8a4c;--fair:#b26b00;--poor:#c8372d;--line:#c2410c;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151514;--surface:#1e1e1c;--text:#ececea;--muted:#a3a39d;--border:#2f2f2c;--accent:#6d8dff;--accent-text:#0d0d0c;--good:#4cc27d;--fair:#e9a23b;--poor:#f0705f;--line:#f59e5b;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#151514;--surface:#1e1e1c;--text:#ececea;--muted:#a3a39d;--border:#2f2f2c;--accent:#6d8dff;--accent-text:#0d0d0c;--good:#4cc27d;--fair:#e9a23b;--poor:#f0705f;--line:#f59e5b;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+main{max-width:640px;margin:0 auto;padding:40px 16px 64px}
+h1{font-size:26px;font-weight:600;margin:0}p{margin:0}.muted{color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-top:16px}
+button{font:inherit;font-weight:500;font-size:17px;border-radius:12px;border:0;background:var(--accent);color:var(--accent-text);padding:14px 32px;cursor:pointer}
+button:disabled{opacity:.5}
+.grade{font-size:56px;font-weight:700;line-height:1}
+.nums{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px}.nums b{font-size:20px;display:block}.nums span{font-size:12px;color:var(--muted)}
+svg{width:100%;height:auto;display:block}svg text{fill:var(--muted);font-size:11px}
+code{font:13px ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--border);padding:2px 6px;border-radius:4px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input{font:inherit;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);flex:1;min-width:0}
+.small{font-size:13px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Does your internet lag when it's busy?</h1>
+  <p class="muted" style="margin-top:8px">A 15-second test in your browser. It measures delay at rest, then again while downloading and uploading. That's what makes calls stutter on a "fast" connection.</p>
+  <div class="card" style="text-align:center">
+    <button id="go">Start lag test</button>
+    <p class="muted small" style="margin-top:10px" id="status">Uses about 50–300 MB of data. Others on your network may notice for a few seconds.</p>
+  </div>
+  <div class="card" id="result" hidden>
+    <div class="row"><div class="grade" id="grade">–</div><div style="flex:1"><b id="gtitle"></b><p class="muted" id="gtext"></p></div></div>
+    <div class="nums">
+      <div><b id="idle">–</b><span>Delay at rest</span></div>
+      <div><b id="dl">–</b><span>Downloading</span></div>
+      <div><b id="ul">–</b><span>Uploading</span></div>
+    </div>
+    <div style="margin-top:16px" id="chart"></div>
+    <p class="muted small" style="margin-top:6px">Delay to a nearby server during the test. Shaded areas are under load.</p>
+  </div>
+  <div class="card">
+    <b>Is it a particular website?</b>
+    <form class="row" id="siteform" style="margin-top:10px"><input id="site" placeholder="youtube.com" aria-label="Website"><button style="font-size:15px;padding:9px 16px">Time it</button></form>
+    <p class="muted small" style="margin-top:8px" id="siteout">Compares how long that site takes to answer with two well-known sites.</p>
+  </div>
+  <div class="card">
+    <b>Want to know <i>why</i>?</b>
+    <p class="muted" style="margin-top:6px">A browser can't see your Wi-Fi, your router or the route to your provider. The NetDoctor app checks all six parts of the path and tells you, in plain words, where the problem is and what to do.</p>
+    <p style="margin-top:10px"><code>pipx install netdoctor && netdoctor</code></p>
+  </div>
+</main>
+<script>
+const CF = "https://speed.cloudflare.com";
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const med = (a) => { const s = a.filter((x) => x != null).sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
+const GRADES = [[5, "A+", "Perfect for calls and gaming"], [30, "A", "Great"], [60, "B", "Good, minor lag possible"], [200, "C", "Calls may stutter during big uploads or downloads"], [400, "D", "Noticeable lag whenever the connection is busy"], [1e9, "F", "Calls and games unusable while anything downloads"]];
+
+async function ping() {
+  const t0 = performance.now();
+  try { await fetch(`${CF}/__down?bytes=0&r=${Math.random()}`, { cache: "no-store" }); return performance.now() - t0; }
+  catch { return null; }
+}
+
+async function sampler(points, phaseRef, t0, stop) {
+  while (!stop.done) {
+    const t = (performance.now() - t0) / 1000, ph = phaseRef.v;
+    ping().then((ms) => points.push([t, ms, ph]));
+    await sleep(200);
+  }
+}
+
+async function load(dir, seconds) {
+  const ctrl = new AbortController();
+  const end = performance.now() + seconds * 1000;
+  let bytes = 0;
+  const blob = dir === "upload" ? new Blob([new Uint8Array(8e6)]) : null;
+  const worker = async () => {
+    while (performance.now() < end) {
+      try {
+        if (dir === "download") {
+          const r = await fetch(`${CF}/__down?bytes=25000000&r=${Math.random()}`, { signal: ctrl.signal, cache: "no-store" });
+          const reader = r.body.getReader();
+          for (;;) { const { done, value } = await reader.read(); if (done) break; bytes += value.length; if (performance.now() > end) { ctrl.abort(); break; } }
+        } else {
+          await fetch(`${CF}/__up`, { method: "POST", body: blob, signal: ctrl.signal }); bytes += blob.size;
+        }
+      } catch { break; }
+    }
+  };
+  const t0 = performance.now();
+  setTimeout(() => ctrl.abort(), seconds * 1000 + 500);
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  return (bytes * 8) / ((performance.now() - t0) / 1000) / 1e6;
+}
+
+function chart(points) {
+  const W = 600, H = 150, T = 10, B = 18, max = Math.max(50, ...points.map((p) => p[1] || 0).sort((a, b) => a - b).slice(-3, -2)) * 1.1;
+  const tMax = Math.max(...points.map((p) => p[0]), 1);
+  const x = (t) => (t / tMax) * W, y = (v) => T + (1 - Math.min(v, max) / max) * (H - T - B);
+  let bands = "", d = "", prev = null;
+  for (const ph of ["download", "upload"]) {
+    const ts = points.filter((p) => p[2] === ph).map((p) => p[0]);
+    if (ts.length) bands += `<rect x="${x(Math.min(...ts))}" y="${T}" width="${x(Math.max(...ts)) - x(Math.min(...ts))}" height="${H - T - B}" fill="var(--accent)" opacity="0.07"/><text x="${(x(Math.min(...ts)) + x(Math.max(...ts))) / 2}" y="${H - 4}" text-anchor="middle">${ph}ing</text>`;
+  }
+  points.sort((a, b) => a[0] - b[0]).forEach((p) => { if (p[1] != null) { d += `${prev ? "L" : "M"}${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`; prev = p; } });
+  return `<svg viewBox="0 0 ${W} ${H}">${bands}<path d="${d}" fill="none" stroke="var(--line)" stroke-width="1.6"/><text x="0" y="${T + 8}">${Math.round(max)} ms</text></svg>`;
+}
+
+$("go").onclick = async () => {
+  $("go").disabled = true;
+  const points = [], phase = { v: "idle" }, stop = { done: false }, t0 = performance.now();
+  $("status").textContent = "Measuring delay at rest…";
+  await ping();
+  const s = sampler(points, phase, t0, stop);
+  await sleep(3000);
+  phase.v = "download"; $("status").textContent = "Testing while downloading…";
+  const down = await load("download", 5);
+  phase.v = "upload"; $("status").textContent = "Testing while uploading…";
+  const up = await load("upload", 5);
+  stop.done = true; await s; await sleep(400);
+  const idle = med(points.filter((p) => p[2] === "idle").map((p) => p[1]));
+  const dl = med(points.filter((p) => p[2] === "download" && p[0] > 4).map((p) => p[1]));
+  const ul = med(points.filter((p) => p[2] === "upload").map((p) => p[1]));
+  const extra = Math.max(0, Math.max(dl ?? 0, ul ?? 0) - (idle ?? 0));
+  const [, g, text] = GRADES.find(([lim]) => extra < lim);
+  $("grade").textContent = g;
+  $("grade").style.color = extra < 60 ? "var(--good)" : extra < 200 ? "var(--fair)" : "var(--poor)";
+  $("gtitle").textContent = `Lag grade ${g}: ${text}`;
+  $("gtext").textContent = `Delay rises by ${Math.round(extra)} ms when your connection is busy. Speed: ${Math.round(down)} Mbps down, ${Math.round(up)} Mbps up.`;
+  $("idle").textContent = idle ? `${Math.round(idle)} ms` : "–";
+  $("dl").textContent = dl ? `${Math.round(dl)} ms` : "–";
+  $("ul").textContent = ul ? `${Math.round(ul)} ms` : "–";
+  $("chart").innerHTML = chart(points);
+  $("result").hidden = false;
+  $("status").textContent = "Done. Run it again any time.";
+  $("go").disabled = false;
+};
+
+async function timeSite(url) {
+  const t0 = performance.now();
+  try { await fetch(url, { mode: "no-cors", cache: "no-store" }); return performance.now() - t0; } catch { return null; }
+}
+$("siteform").onsubmit = async (e) => {
+  e.preventDefault();
+  let host = $("site").value.trim().replace(/^https?:\/\//, "").split("/")[0];
+  if (!host) return;
+  $("siteout").textContent = "Timing…";
+  const [t, a, b] = await Promise.all([timeSite(`https://${host}/`), timeSite("https://www.google.com/generate_204"), timeSite("https://www.wikipedia.org/")]);
+  const ref = med([a, b]);
+  if (t == null) $("siteout").textContent = `${host} didn't answer. If other sites work, the problem is likely the site itself.`;
+  else $("siteout").textContent = `${host} answered in ${Math.round(t)} ms (well-known sites: ${Math.round(ref)} ms). ` + (t > Math.max(1000, 3 * ref) ? "That site looks slow from here; your connection is likely fine." : "That's normal.");
+};
+</script>
+</body>
+</html>
